@@ -10,6 +10,10 @@
  * and the Eclipse Distribution License is available at
  *   http://www.eclipse.org/org/documents/edl-v10.php.
  *
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ * 
  * Contributors:
  *    Ian Craggs, Allan Stockdill-Mander - initial implementation
  *    Ian Craggs - fix for bug #409702
@@ -271,6 +275,9 @@ char* SSLSocket_get_version_string(int version)
 #endif
 #if defined(TLS3_VERSION)
 		{ TLS3_VERSION, "TLS 1.2" },
+#endif
+#if defined(TLS4_VERSION)
+		{ TLS4_VERSION, "TLS 1.3" },
 #endif
 	};
 
@@ -579,6 +586,11 @@ int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 			net->ctx = SSL_CTX_new(TLSv1_2_client_method());
 			break;
 #endif
+#if defined(SSL_OP_NO_TLSv1_3) && !defined(OPENSSL_NO_TLS1)
+		case MQTT_SSL_VERSION_TLS_1_3:
+			net->ctx = SSL_CTX_NEW(TLS_client_method());
+			break;
+#endif	
 		default:
 			break;
 		}
@@ -690,6 +702,11 @@ int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 
 	SSL_CTX_set_mode(net->ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
+#ifdef TLS1_3_VERSION
+	SSL_CTX_set_min_proto_version(net->ctx, TLS1_3_VERSION);
+	SSL_CTX_set_max_proto_version(net->ctx, TLS1_3_VERSION);
+#endif
+	
 	goto exit;
 free_ctx:
 	SSL_CTX_free(net->ctx);
