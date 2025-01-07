@@ -10,6 +10,10 @@
  * and the Eclipse Distribution License is available at
  *   http://www.eclipse.org/org/documents/edl-v10.php.
  *
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ * 
  * Contributors:
  *    Ian Craggs - initial API and implementation
  *    Ian Craggs, Allan Stockdill-Mander - SSL connections
@@ -1031,6 +1035,8 @@ typedef struct
 #define MQTT_SSL_VERSION_TLS_1_0 1
 #define MQTT_SSL_VERSION_TLS_1_1 2
 #define MQTT_SSL_VERSION_TLS_1_2 3
+#define MQTT_SSL_VERSION_TLS_1_3 4
+
 
 /**
 * MQTTAsync_sslProperties defines the settings to establish an SSL/TLS connection using the
