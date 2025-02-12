@@ -10,6 +10,10 @@
  * and the Eclipse Distribution License is available at
  *   http://www.eclipse.org/org/documents/edl-v10.php.
  *
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ *
  * Contributors:
  *    Ian Craggs - initial API and implementation and/or initial documentation
  *    Ian Craggs - bug 384016 - segv setting will message
@@ -1600,6 +1604,11 @@ static MQTTResponse MQTTClient_connectURI(MQTTClient handle, MQTTClient_connectO
 		{
 		    m->c->sslopts->protos = options->ssl->protos;
 		    m->c->sslopts->protos_len = options->ssl->protos_len;
+			// set options for external signing support
+			m->c->sslopts->ssl_external_signing_method = options->ssl->ssl_external_signing_method;
+			m->c->sslopts->ssl_external_signing_algorithm = options->ssl->ssl_external_signing_algorithm;
+			m->c->sslopts->ssl_external_sign_cb = options->ssl->ssl_external_sign_cb;
+
 		}
 	}
 #endif
