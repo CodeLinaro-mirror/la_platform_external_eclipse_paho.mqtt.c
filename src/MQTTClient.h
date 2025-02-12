@@ -770,9 +770,17 @@ typedef struct
 	 * Exists only if struct_version >= 5
 	 */
 	unsigned int protos_len;
+  /**
+   * Added new options for external signing support
+   */
+  uint8_t ssl_external_signing_method;
+  uint16_t ssl_external_signing_algorithm;
+  unsigned int (*ssl_external_sign_cb) (uint16_t signature_algorithm,
+                                        const void *in, size_t in_len,
+                                        void *out, size_t max_out, size_t *out_len);
 } MQTTClient_SSLOptions;
 
-#define MQTTClient_SSLOptions_initializer { {'M', 'Q', 'T', 'S'}, 5, NULL, NULL, NULL, NULL, NULL, 1, MQTT_SSL_VERSION_DEFAULT, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 }
+#define MQTTClient_SSLOptions_initializer { {'M', 'Q', 'T', 'S'}, 5, NULL, NULL, NULL, NULL, NULL, 1, MQTT_SSL_VERSION_DEFAULT, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, NULL }
 
 /**
   * MQTTClient_libraryInfo is used to store details relating to the currently used

@@ -82,6 +82,8 @@ static ssl_mutex_type sslCoreMutex;
 
 /* Used to store MQTTClient_SSLOptions for TLS-PSK callback */
 static int tls_ex_index_ssl_opts;
+/* Used to store MQTTClient_SSLOptions for TLS-Signing callback */
+static int tls_ex_index_ssl_opts2;
 
 #if defined(_WIN32) || defined(_WIN64)
 #define iov_len len
@@ -497,6 +499,7 @@ int SSLSocket_initialize(void)
 	SSL_create_mutex(&sslCoreMutex);
 
 	tls_ex_index_ssl_opts = SSL_get_ex_new_index(0, "paho ssl options", NULL, NULL, NULL);
+	tls_ex_index_ssl_opts2 = SSL_get_ex_new_index(0, "paho ssl options for external signing", NULL, NULL, NULL);
 
 exit:
 	FUNC_EXIT_RC(rc);
@@ -549,6 +552,30 @@ exit:
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
+
+enum ssl_private_key_result_t call_external_sign_cb(SSL *ssl, uint8_t *out, size_t *out_len,
+                                        size_t max_out,
+                                        uint16_t signature_algorithm,
+                                        const uint8_t *in, size_t in_len)
+{
+	int rc = 0;
+	FUNC_ENTRY;
+	Log(TRACE_PROTOCOL, 1, "ssl call_external_sign_cb....");
+	{
+		SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
+		MQTTClient_SSLOptions* opts = SSL_CTX_get_ex_data(ctx, tls_ex_index_ssl_opts2);
+		if (opts == NULL) goto exit;
+
+		if (opts->ssl_external_sign_cb != NULL)
+			rc = opts->ssl_external_sign_cb(signature_algorithm, in, in_len, out, max_out, out_len);
+	}
+
+exit:
+	FUNC_EXIT_RC(rc);
+	return rc;
+}
+
+static SSL_PRIVATE_KEY_METHOD sign_method = {&call_external_sign_cb,NULL,NULL};
 
 int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 {
@@ -625,17 +652,31 @@ int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 			SSL_CTX_set_default_passwd_cb_userdata(net->ctx, (void*)opts->privateKeyPassword);
 		}
 
-		/* support for ASN.1 == DER format? DER can contain only one certificate? */
-		rc = SSL_CTX_use_PrivateKey_file(net->ctx, opts->privateKey, SSL_FILETYPE_PEM);
-		if (opts->privateKey == opts->keyStore)
-			opts->privateKey = NULL;
-		if (rc != 1)
+		// External Signing Method
+		if(opts->ssl_external_signing_method)
 		{
-			if (opts->struct_version >= 3)
-				SSLSocket_error("SSL_CTX_use_PrivateKey_file", NULL, net->socket, rc, opts->ssl_error_cb, opts->ssl_error_context);
-			else
-				SSLSocket_error("SSL_CTX_use_PrivateKey_file", NULL, net->socket, rc, NULL, NULL);
-			goto free_ctx;
+			Log(TRACE_PROTOCOL, 1, "SSL using External Signing method");
+			SSL_CTX_set_signing_algorithm_prefs(net->ctx,&(opts->ssl_external_signing_algorithm),1);
+			SSL_CTX_set_ex_data(net->ctx, tls_ex_index_ssl_opts2, opts);
+			SSL_CTX_set_private_key_method(net->ctx,&sign_method);
+			opts->privateKey=NULL;
+			
+		}
+		else
+		{
+			Log(TRACE_PROTOCOL, 1, "SSL using Private key");
+			/* support for ASN.1 == DER format? DER can contain only one certificate? */
+			rc = SSL_CTX_use_PrivateKey_file(net->ctx, opts->privateKey, SSL_FILETYPE_PEM);
+			if (opts->privateKey == opts->keyStore)
+				opts->privateKey = NULL;
+			if (rc != 1)
+			{
+				if (opts->struct_version >= 3)
+					SSLSocket_error("SSL_CTX_use_PrivateKey_file", NULL, net->socket, rc, opts->ssl_error_cb, opts->ssl_error_context);
+				else
+					SSLSocket_error("SSL_CTX_use_PrivateKey_file", NULL, net->socket, rc, NULL, NULL);
+				goto free_ctx;
+			}
 		}
 	}
 
