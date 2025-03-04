@@ -82,8 +82,10 @@ static ssl_mutex_type sslCoreMutex;
 
 /* Used to store MQTTClient_SSLOptions for TLS-PSK callback */
 static int tls_ex_index_ssl_opts;
+#if defined(PAHO_WITH_BORINGSSL)
 /* Used to store MQTTClient_SSLOptions for TLS-Signing callback */
 static int tls_ex_index_ssl_opts2;
+#endif
 
 #if defined(_WIN32) || defined(_WIN64)
 #define iov_len len
@@ -499,8 +501,9 @@ int SSLSocket_initialize(void)
 	SSL_create_mutex(&sslCoreMutex);
 
 	tls_ex_index_ssl_opts = SSL_get_ex_new_index(0, "paho ssl options", NULL, NULL, NULL);
+#if defined(PAHO_WITH_BORINGSSL)
 	tls_ex_index_ssl_opts2 = SSL_get_ex_new_index(0, "paho ssl options for external signing", NULL, NULL, NULL);
-
+#endif
 exit:
 	FUNC_EXIT_RC(rc);
 	return rc;
@@ -553,6 +556,7 @@ exit:
 	return rc;
 }
 
+#if defined(PAHO_WITH_BORINGSSL)
 enum ssl_private_key_result_t call_external_sign_cb(SSL *ssl, uint8_t *out, size_t *out_len,
                                         size_t max_out,
                                         uint16_t signature_algorithm,
@@ -576,6 +580,7 @@ exit:
 }
 
 static SSL_PRIVATE_KEY_METHOD sign_method = {&call_external_sign_cb,NULL,NULL};
+#endif
 
 int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 {
@@ -652,6 +657,7 @@ int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 			SSL_CTX_set_default_passwd_cb_userdata(net->ctx, (void*)opts->privateKeyPassword);
 		}
 
+		#if defined(PAHO_WITH_BORINGSSL)
 		// External Signing Method
 		if(opts->ssl_external_signing_method)
 		{
@@ -663,6 +669,7 @@ int SSLSocket_createContext(networkHandles* net, MQTTClient_SSLOptions* opts)
 			
 		}
 		else
+		#endif
 		{
 			Log(TRACE_PROTOCOL, 1, "SSL using Private key");
 			/* support for ASN.1 == DER format? DER can contain only one certificate? */

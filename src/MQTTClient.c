@@ -1604,11 +1604,12 @@ static MQTTResponse MQTTClient_connectURI(MQTTClient handle, MQTTClient_connectO
 		{
 		    m->c->sslopts->protos = options->ssl->protos;
 		    m->c->sslopts->protos_len = options->ssl->protos_len;
-			// set options for external signing support
+			// set options for external signing 
+			#if defined(PAHO_WITH_BORINGSSL)
 			m->c->sslopts->ssl_external_signing_method = options->ssl->ssl_external_signing_method;
 			m->c->sslopts->ssl_external_signing_algorithm = options->ssl->ssl_external_signing_algorithm;
 			m->c->sslopts->ssl_external_sign_cb = options->ssl->ssl_external_sign_cb;
-
+			#endif
 		}
 	}
 #endif
