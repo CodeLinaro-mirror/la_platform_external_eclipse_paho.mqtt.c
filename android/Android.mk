@@ -7,6 +7,7 @@ libpaho-mqtt3_c_includes := $(LOCAL_PATH)/$(libpaho-mqtt3_lib_path) \
 $(LOCAL_PATH)/../../../external/boringssl/include \
 
 LOCAL_CFLAGS := -g -Wno-unused-parameter -Wno-unused-variable
+LOCAL_CFLAGS += -DPAHO_WITH_BORINGSSL
 
 libpaho-mqtt3_local_src_c_files_common := \
 $(libpaho-mqtt3_lib_path)/MQTTTime.c \
@@ -103,6 +104,7 @@ LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/$(libpaho-mqtt3_lib_path)
 LOCAL_C_INCLUDES:= $(libpaho-mqtt3_c_includes)
 LOCAL_CFLAGS := -g -Wno-unused-parameter -Wno-unused-variable
 LOCAL_CFLAGS += -DOPENSSL
+LOCAL_CFLAGS += -DDPAHO_WITH_BORINGSSL
 LOCAL_SRC_FILES := $(libpaho-mqtt3_local_src_c_files_common) $(libpaho-mqtt3_local_src_c_files_cs)
 LOCAL_MODULE_TAG := optional
 LOCAL_VENDOR_MODULE := true

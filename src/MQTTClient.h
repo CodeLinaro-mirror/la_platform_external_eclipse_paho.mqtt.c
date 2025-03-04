@@ -773,15 +773,20 @@ typedef struct
   /**
    * Added new options for external signing support
    */
+  #if defined(PAHO_WITH_BORINGSSL)
   uint8_t ssl_external_signing_method;
   uint16_t ssl_external_signing_algorithm;
   unsigned int (*ssl_external_sign_cb) (uint16_t signature_algorithm,
                                         const void *in, size_t in_len,
                                         void *out, size_t max_out, size_t *out_len);
+  #endif
 } MQTTClient_SSLOptions;
 
+#if defined(PAHO_WITH_BORINGSSL)
 #define MQTTClient_SSLOptions_initializer { {'M', 'Q', 'T', 'S'}, 5, NULL, NULL, NULL, NULL, NULL, 1, MQTT_SSL_VERSION_DEFAULT, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, NULL }
-
+#else
+#define MQTTClient_SSLOptions_initializer { {'M', 'Q', 'T', 'S'}, 5, NULL, NULL, NULL, NULL, NULL, 1, MQTT_SSL_VERSION_DEFAULT, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0 }
+#endif
 /**
   * MQTTClient_libraryInfo is used to store details relating to the currently used
   * library such as the version in use, the time it was built and relevant openSSL
