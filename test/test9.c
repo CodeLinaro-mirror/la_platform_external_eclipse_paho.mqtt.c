@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2020 IBM Corp. and others
+ * Copyright (c) 2012, 2024 IBM Corp., Ian Craggs
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -56,8 +56,8 @@ struct Options
 	int test_no;
 } options =
 {
-	"mqtt.eclipse.org:1883",
 	"localhost:1883",
+	"localhost:1884",
 	0,
 	0,
 };
@@ -338,7 +338,7 @@ int test1_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 
 	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test1_will_message_received = 1;
 	else
 	  test1_messages_received++;
@@ -599,7 +599,7 @@ int test2_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 
 	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test2_will_message_received = 1;
 	else
 	  test2_messages_received++;
@@ -868,9 +868,9 @@ int test3_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 	MQTTAsync c = (MQTTAsync)context;
 	static int message_count = 0;
 
-	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
+	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\" %d", topicName, message->payloadlen, message->payload, message->payloadlen);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test3_will_message_received = 1;
 	else
 	  test3_messages_received++;
@@ -1129,7 +1129,7 @@ int test4_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 
 	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test4_will_message_received = 1;
 	else
 	  test4_messages_received++;
@@ -1391,9 +1391,9 @@ int test5_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 	MQTTAsync c = (MQTTAsync)context;
 	static int message_count = 0;
 
-	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
+	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\" %d", topicName, message->payloadlen, message->payload, message->payloadlen);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test5_will_message_received = 1;
 	else
 	  test5_messages_received++;
@@ -1716,7 +1716,7 @@ int test6(struct Options options)
 	/* let client c go: connect, and send disconnect command to proxy */
 	opts.will = &wopts;
 	opts.will->payload.data = "will message";
-	opts.will->payload.len = (int)strlen(opts.will->payload.data) + 1;
+	opts.will->payload.len = (int)strlen(opts.will->payload.data);
 	opts.will->qos = 1;
 	opts.will->retained = 0;
 	opts.will->topicName = willTopic;
@@ -1814,7 +1814,7 @@ int test7_messageArrived(void* context, char* topicName, int topicLen, MQTTAsync
 
 	MyLog(LOGA_DEBUG, "Message received on topic %s, \"%.*s\"", topicName, message->payloadlen, message->payload);
 
-	if (memcmp(message->payload, "will message", message->payloadlen) == 0)
+	if (message->payloadlen == strlen("will message") && memcmp(message->payload, "will message", message->payloadlen) == 0)
 	  test7_will_message_received = 1;
 	else
 	  test7_messages_received++;
@@ -2501,6 +2501,24 @@ void test10cOnConnect(void* context, MQTTAsync_successData* response)
 	test10cConnected = 1;
 }
 
+int test10onSendFailureCalled = 0;
+int test10onSendSuccessCalled = 0;
+
+void test10onSendFailure(void* context, MQTTAsync_failureData* response)
+{
+	MQTTAsync c = (MQTTAsync)context;
+
+	MyLog(LOGA_INFO, "In send onFailure callback for client c rc %s", MQTTAsync_strerror(response->code));
+	test10onSendFailureCalled++;
+}
+
+void test10onSendSuccess(void* context, MQTTAsync_successData* response)
+{
+	MQTTAsync c = (MQTTAsync)context;
+
+	MyLog(LOGA_DEBUG, "In send onSuccess callback for client c");
+	test10onSendSuccessCalled++;
+}
 
 int test10(struct Options options)
 {
@@ -2523,6 +2541,8 @@ int test10(struct Options options)
 
 	test10Finished = 0;
 	failures = 0;
+	test10onSendFailureCalled = 0;
+	test10onSendSuccessCalled = 0;
 	MyLog(LOGA_INFO, "Starting Offline buffering 10 - delete oldest buffered messages first");
 	fprintf(xml, "<testcase classname=\"test9\" name=\"%s\"", testname);
 	global_start_time = start_clock();
@@ -2575,17 +2595,19 @@ int test10(struct Options options)
 	/* send some messages while disconnected */
 	for (i = 0; i < test10MessagesToSend; ++i)
 	{
-	  char buf[50];
+		char buf[50];
+		MQTTAsync_message pubmsg = MQTTAsync_message_initializer;
+		MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
 
-	  MQTTAsync_message pubmsg = MQTTAsync_message_initializer;
-	  MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
-	  pubmsg.qos = i % 3;
-	  sprintf(buf, "%d message no, QoS %d", i, pubmsg.qos);
-	  pubmsg.payload = buf;
-	  pubmsg.payloadlen = (int)(strlen(pubmsg.payload) + 1);
-	  pubmsg.retained = 0;
-	  rc = MQTTAsync_sendMessage(c, test_topic, &pubmsg, &opts);
-      assert("Good rc from sendMessage", rc == MQTTASYNC_SUCCESS, "rc was %d ", rc);
+		opts.onSuccess = test10onSendSuccess;
+		opts.onFailure = test10onSendFailure;
+		pubmsg.qos = i % 3;
+		sprintf(buf, "%d message no, QoS %d", i, pubmsg.qos);
+		pubmsg.payload = buf;
+		pubmsg.payloadlen = (int) (strlen(pubmsg.payload) + 1);
+		pubmsg.retained = 0;
+		rc = MQTTAsync_sendMessage(c, test_topic, &pubmsg, &opts);
+		assert("Good rc from sendMessage", rc == MQTTASYNC_SUCCESS, "rc was %d ", rc);
 	}
 
 	assert3PendingTokens(c);
@@ -2614,8 +2636,13 @@ int test10(struct Options options)
 		MySleep(100);
 
 	waitForNoPendingTokens(c);
+	MyLog(LOGA_INFO, "Send onSuccess %d onFailure %d", test10onSendSuccessCalled, test10onSendFailureCalled);
+	assert("test10onSendSuccessCalled should be 3", test10onSendSuccessCalled == 3, "test10onSendSuccessCalled was %d", test10onSendSuccessCalled);
+	assert("test10onSendFailureCalled should be 3", test10onSendFailureCalled == 3, "test10onSendFailureCalled was %d", test10onSendFailureCalled);
 
 	/* Now try the same thing, but force messages to be persisted and re-read */
+	test10onSendFailureCalled = 0;
+	test10onSendSuccessCalled = 0;
 
 	/* disconnect so we buffer some messages again */
 	rc = MQTTAsync_disconnect(c, NULL);
@@ -2624,17 +2651,19 @@ int test10(struct Options options)
 	/* send some messages while disconnected */
 	for (i = 0; i < test10MessagesToSend; ++i)
 	{
-	  char buf[50];
+		char buf[50];
+		MQTTAsync_message pubmsg = MQTTAsync_message_initializer;
+		MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
 
-	  MQTTAsync_message pubmsg = MQTTAsync_message_initializer;
-	  MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
-	  pubmsg.qos = i % 3;
-	  sprintf(buf, "%d message no, QoS %d", i, pubmsg.qos);
-	  pubmsg.payload = buf;
-	  pubmsg.payloadlen = (int)(strlen(pubmsg.payload) + 1);
-	  pubmsg.retained = 0;
-	  rc = MQTTAsync_sendMessage(c, test_topic, &pubmsg, &opts);
-      assert("Good rc from sendMessage", rc == MQTTASYNC_SUCCESS, "rc was %d ", rc);
+		opts.onSuccess = test10onSendSuccess;
+		opts.onFailure = test10onSendFailure;
+		pubmsg.qos = i % 3;
+		sprintf(buf, "%d message no, QoS %d", i, pubmsg.qos);
+		pubmsg.payload = buf;
+		pubmsg.payloadlen = (int) (strlen(pubmsg.payload) + 1);
+		pubmsg.retained = 0;
+		rc = MQTTAsync_sendMessage(c, test_topic, &pubmsg, &opts);
+		assert("Good rc from sendMessage", rc == MQTTASYNC_SUCCESS, "rc was %d ", rc);
 	}
 
 	assert3PendingTokens(c);
@@ -2675,6 +2704,10 @@ int test10(struct Options options)
 	rc = MQTTAsync_disconnect(d, NULL);
  	assert("Good rc from disconnect", rc == MQTTASYNC_SUCCESS, "rc was %d ", rc);
 
+	MyLog(LOGA_INFO, "Send onSuccess %d onFailure %d", test10onSendSuccessCalled, test10onSendFailureCalled);
+	assert("test10onSendSuccessCalled should be 0", test10onSendSuccessCalled == 0, "test10onSendSuccessCalled was %d", test10onSendSuccessCalled);
+	assert("test10onSendFailureCalled should be 6", test10onSendFailureCalled == 6, "test10onSendFailureCalled was %d", test10onSendFailureCalled);
+
 exit:
 	MySleep(200);
 	MQTTAsync_destroy(&c);
@@ -2690,7 +2723,7 @@ int main(int argc, char** argv)
 {
 	int* numtests = &tests;
 	int rc = 0;
-	int (*tests[])() = { NULL, test1, test2, test3, test4, test5, test6, test7, test8, test9, test10};
+	int (*tests[])(struct Options) = { NULL, test1, test2, test3, test4, test5, test6, test7, test8, test9, test10};
 	time_t randtime;
 
 	srand((unsigned) time(&randtime));

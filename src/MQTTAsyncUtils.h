@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2020 IBM Corp. and others
+ * Copyright (c) 2009, 2024 IBM Corp. and others
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -20,9 +20,11 @@
 #include "MQTTPacket.h"
 #include "Thread.h"
 
-#define URI_TCP "tcp://"
-#define URI_WS  "ws://"
-#define URI_WSS "wss://"
+#define URI_TCP  "tcp://"
+#define URI_MQTT "mqtt://"
+#define URI_WS   "ws://"
+#define URI_WSS  "wss://"
+#define URI_UNIX "unix://"
 
 enum MQTTAsync_threadStates
 {
@@ -88,6 +90,7 @@ typedef struct
 typedef struct MQTTAsync_struct
 {
 	char* serverURI;
+	int unixsock;
 	int ssl;
 	int websocket;
 	Clients* c;
@@ -169,8 +172,10 @@ void MQTTAsync_closeSession(Clients* client, enum MQTTReasonCodes reasonCode, MQ
 int MQTTAsync_disconnect1(MQTTAsync handle, const MQTTAsync_disconnectOptions* options, int internal);
 int MQTTAsync_assignMsgId(MQTTAsyncs* m);
 int MQTTAsync_getNoBufferedMessages(MQTTAsyncs* m);
-void MQTTAsync_writeComplete(int socket, int rc);
+void MQTTAsync_writeContinue(SOCKET socket);
+void MQTTAsync_writeComplete(SOCKET socket, int rc);
 void setRetryLoopInterval(int keepalive);
+void MQTTAsync_NULLPublishResponses(MQTTAsyncs* m);
 
 #if defined(_WIN32) || defined(_WIN64)
 #else
