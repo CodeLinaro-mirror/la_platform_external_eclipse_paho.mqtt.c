@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2020 IBM Corp.
+ * Copyright (c) 2009, 2023 IBM Corp.
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -80,7 +80,7 @@ int setStack(int create);
 int setStack(int create)
 {
 	int i = -1;
-	thread_id_type curid = Thread_getid();
+	thread_id_type curid = Paho_thread_getid();
 
 	my_thread = NULL;
 	for (i = 0; i < MAX_THREADS && i < thread_count; ++i)
@@ -105,11 +105,11 @@ int setStack(int create)
 
 void StackTrace_entry(const char* name, int line, enum LOG_LEVELS trace_level)
 {
-	Thread_lock_mutex(stack_mutex);
+	Paho_thread_lock_mutex(stack_mutex);
 	if (!setStack(1))
 		goto exit;
 	if (trace_level != -1)
-		Log_stackTrace(trace_level, 9, (int)my_thread->id, my_thread->current_depth, name, line, NULL);
+		Log_stackTrace(trace_level, 9, my_thread->id, my_thread->current_depth, name, line, NULL);
 	strncpy(my_thread->callstack[my_thread->current_depth].name, name, sizeof(my_thread->callstack[0].name)-1);
 	my_thread->callstack[(my_thread->current_depth)++].line = line;
 	if (my_thread->current_depth > my_thread->maxdepth)
@@ -117,13 +117,13 @@ void StackTrace_entry(const char* name, int line, enum LOG_LEVELS trace_level)
 	if (my_thread->current_depth >= MAX_STACK_DEPTH)
 		Log(LOG_FATAL, -1, "Max stack depth exceeded");
 exit:
-	Thread_unlock_mutex(stack_mutex);
+	Paho_thread_unlock_mutex(stack_mutex);
 }
 
 
 void StackTrace_exit(const char* name, int line, void* rc, enum LOG_LEVELS trace_level)
 {
-	Thread_lock_mutex(stack_mutex);
+	Paho_thread_lock_mutex(stack_mutex);
 	if (!setStack(0))
 		goto exit;
 	if (--(my_thread->current_depth) < 0)
@@ -133,12 +133,12 @@ void StackTrace_exit(const char* name, int line, void* rc, enum LOG_LEVELS trace
 	if (trace_level != -1)
 	{
 		if (rc == NULL)
-			Log_stackTrace(trace_level, 10, (int)my_thread->id, my_thread->current_depth, name, line, NULL);
+			Log_stackTrace(trace_level, 10, my_thread->id, my_thread->current_depth, name, line, NULL);
 		else
-			Log_stackTrace(trace_level, 11, (int)my_thread->id, my_thread->current_depth, name, line, (int*)rc);
+			Log_stackTrace(trace_level, 11, my_thread->id, my_thread->current_depth, name, line, (int*)rc);
 	}
 exit:
-	Thread_unlock_mutex(stack_mutex);
+	Paho_thread_unlock_mutex(stack_mutex);
 }
 
 

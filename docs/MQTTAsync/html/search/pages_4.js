@@ -1,5 +1,4 @@
 var searchData=
 [
-  ['subscription_20example_701',['Subscription example',['../subscribe.html',1,'']]],
-  ['subscription_20wildcards_702',['Subscription wildcards',['../wildcard.html',1,'']]]
+  ['for_20c_20mqttasync_0',['Asynchronous MQTT client library for C (MQTTAsync)',['../index.html',1,'']]]
 ];
