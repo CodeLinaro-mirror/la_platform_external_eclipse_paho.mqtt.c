@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2012, 2020 IBM Corp.
+ * Copyright (c) 2012, 2023 IBM Corp., Ian Craggs
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -25,7 +25,7 @@
 #include <windows.h>
 #endif
 
-#define ADDRESS     "tcp://mqtt.eclipse.org:1883"
+#define ADDRESS     "tcp://mqtt.eclipseprojects.io:1883"
 #define CLIENTID    "ExampleClientPub"
 #define TOPIC       "MQTT Examples"
 #define PAYLOAD     "Hello World!"
@@ -53,7 +53,8 @@ int msgarrvd(void *context, char *topicName, int topicLen, MQTTClient_message *m
 void connlost(void *context, char *cause)
 {
     printf("\nConnection lost\n");
-    printf("     cause: %s\n", cause);
+    if (cause)
+    	printf("     cause: %s\n", cause);
 }
 
 int main(int argc, char* argv[])
@@ -64,7 +65,10 @@ int main(int argc, char* argv[])
     MQTTClient_deliveryToken token;
     int rc;
 
-    if ((rc = MQTTClient_create(&client, ADDRESS, CLIENTID,
+    const char* uri = (argc > 1) ? argv[1] : ADDRESS;
+    printf("Using server at %s\n", uri);
+
+    if ((rc = MQTTClient_create(&client, uri, CLIENTID,
         MQTTCLIENT_PERSISTENCE_NONE, NULL)) != MQTTCLIENT_SUCCESS)
     {
         printf("Failed to create client, return code %d\n", rc);
