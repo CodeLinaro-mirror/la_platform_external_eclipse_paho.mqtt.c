@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2021 IBM Corp., Ian Craggs and others
+ * Copyright (c) 2009, 2024 IBM Corp., Ian Craggs and others
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -328,9 +328,14 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 	if (strstr(serverURI, "://") != NULL)
 	{
 		if (strncmp(URI_TCP, serverURI, strlen(URI_TCP)) != 0
+		 && strncmp(URI_MQTT, serverURI, strlen(URI_MQTT)) != 0
+#if defined(UNIXSOCK)
+		 && strncmp(URI_UNIX, serverURI, strlen(URI_UNIX)) != 0
+#endif
 		 && strncmp(URI_WS, serverURI, strlen(URI_WS)) != 0
 #if defined(OPENSSL)
-            && strncmp(URI_SSL, serverURI, strlen(URI_SSL)) != 0
+		 && strncmp(URI_SSL, serverURI, strlen(URI_SSL)) != 0
+		 && strncmp(URI_MQTTS, serverURI, strlen(URI_MQTTS)) != 0
 		 && strncmp(URI_WSS, serverURI, strlen(URI_WSS)) != 0
 #endif
 			)
@@ -340,8 +345,14 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 		}
 	}
 
+	if (options && options->maxBufferedMessages <= 0)
+	{
+		rc = MQTTASYNC_MAX_BUFFERED;
+		goto exit;
+	}
+
 	if (options && (strncmp(options->struct_id, "MQCO", 4) != 0 ||
-					options->struct_version < 0 || options->struct_version > 2))
+					options->struct_version < 0 || options->struct_version > 3))
 	{
 		rc = MQTTASYNC_BAD_STRUCTURE;
 		goto exit;
@@ -355,7 +366,9 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 		Log_initialize((Log_nameValue*)MQTTAsync_getVersionInfo());
 		bstate->clients = ListInitialize();
 		Socket_outInitialize();
+		Socket_setWriteContinueCallback(MQTTAsync_writeContinue);
 		Socket_setWriteCompleteCallback(MQTTAsync_writeComplete);
+		Socket_setWriteAvailableCallback(MQTTProtocol_writeAvailable);
 		MQTTAsync_handles = ListInitialize();
 		MQTTAsync_commands = ListInitialize();
 #if defined(OPENSSL)
@@ -372,6 +385,15 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 	memset(m, '\0', sizeof(MQTTAsyncs));
 	if (strncmp(URI_TCP, serverURI, strlen(URI_TCP)) == 0)
 		serverURI += strlen(URI_TCP);
+	else if (strncmp(URI_MQTT, serverURI, strlen(URI_MQTT)) == 0)
+		serverURI += strlen(URI_MQTT);
+#if defined(UNIXSOCK)
+	else if (strncmp(URI_UNIX, serverURI, strlen(URI_UNIX)) == 0)
+	{
+		serverURI += strlen(URI_UNIX);
+		m->unixsock = 1;
+	}
+#endif
 	else if (strncmp(URI_WS, serverURI, strlen(URI_WS)) == 0)
 	{
 		serverURI += strlen(URI_WS);
@@ -381,6 +403,11 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 	else if (strncmp(URI_SSL, serverURI, strlen(URI_SSL)) == 0)
 	{
 		serverURI += strlen(URI_SSL);
+		m->ssl = 1;
+	}
+	else if (strncmp(URI_MQTTS, serverURI, strlen(URI_MQTTS)) == 0)
+	{
+		serverURI += strlen(URI_MQTTS);
 		m->ssl = 1;
 	}
 	else if (strncmp(URI_WSS, serverURI, strlen(URI_WSS)) == 0)
@@ -408,9 +435,10 @@ int MQTTAsync_createWithOptions(MQTTAsync* handle, const char* serverURI, const 
 	m->c->outboundMsgs = ListInitialize();
 	m->c->inboundMsgs = ListInitialize();
 	m->c->messageQueue = ListInitialize();
+	m->c->outboundQueue = ListInitialize();
 	m->c->clientID = MQTTStrdup(clientId);
 	if (m->c->context == NULL || m->c->outboundMsgs == NULL || m->c->inboundMsgs == NULL ||
-			m->c->messageQueue == NULL || m->c->clientID == NULL)
+			m->c->messageQueue == NULL || m->c->outboundQueue == NULL || m->c->clientID == NULL)
 	{
 		rc = PAHO_MEMORY_ERROR;
 		goto exit;
@@ -478,13 +506,14 @@ void MQTTAsync_destroy(MQTTAsync* handle)
 
 	MQTTAsync_closeSession(m->c, MQTTREASONCODE_SUCCESS, NULL);
 
+	MQTTAsync_NULLPublishResponses(m);
 	MQTTAsync_freeResponses(m);
 	MQTTAsync_freeCommands(m);
 	ListFree(m->responses);
 
 	if (m->c)
 	{
-		int saved_socket = m->c->net.socket;
+		SOCKET saved_socket = m->c->net.socket;
 		char* saved_clientid = MQTTStrdup(m->c->clientID);
 #if !defined(NO_PERSISTENCE)
 		MQTTPersistence_close(m->c);
@@ -627,29 +656,28 @@ int MQTTAsync_connect(MQTTAsync handle, const MQTTAsync_connectOptions* options)
 	m->connect.context = options->context;
 	m->connectTimeout = options->connectTimeout;
 
-	MQTTAsync_tostop = 0;
-
 	/* don't lock async mutex if we are being called from a callback */
-	thread_id = Thread_getid();
+	thread_id = Paho_thread_getid();
 	if (thread_id != sendThread_id && thread_id != receiveThread_id)
 	{
 		MQTTAsync_lock_mutex(mqttasync_mutex);
 		locked = 1;
 	}
+	MQTTAsync_tostop = 0;
 	if (sendThread_state != STARTING && sendThread_state != RUNNING)
 	{
 		sendThread_state = STARTING;
-		Thread_start(MQTTAsync_sendThread, NULL);
+		Paho_thread_start(MQTTAsync_sendThread, NULL);
 	}
 	if (receiveThread_state != STARTING && receiveThread_state != RUNNING)
 	{
 		receiveThread_state = STARTING;
-		Thread_start(MQTTAsync_receiveThread, handle);
+		Paho_thread_start(MQTTAsync_receiveThread, handle);
 	}
 	if (locked)
 		MQTTAsync_unlock_mutex(mqttasync_mutex);
 
-	m->c->keepAliveInterval = options->keepAliveInterval;
+	m->c->keepAliveInterval = m->c->savedKeepAliveInterval = options->keepAliveInterval;
 	setRetryLoopInterval(options->keepAliveInterval);
 	m->c->cleansession = options->cleansession;
 	m->c->maxInflightMessages = options->maxInflight;
@@ -784,7 +812,8 @@ int MQTTAsync_connect(MQTTAsync handle, const MQTTAsync_connectOptions* options)
 		}
 		if (m->c->sslopts->struct_version >= 5)
 		{
-			m->c->sslopts->protos = options->ssl->protos;
+			if (options->ssl->protos)
+				m->c->sslopts->protos = (const unsigned char*)MQTTStrdup((const char*)options->ssl->protos);
 			m->c->sslopts->protos_len = options->ssl->protos_len;
 		}
 	}
@@ -797,11 +826,17 @@ int MQTTAsync_connect(MQTTAsync handle, const MQTTAsync_connectOptions* options)
 #endif
 
 	if (m->c->username)
+	{
 		free((void*)m->c->username);
+		m->c->username = NULL;
+	}
 	if (options->username)
 		m->c->username = MQTTStrdup(options->username);
 	if (m->c->password)
+	{
 		free((void*)m->c->password);
+		m->c->password = NULL;
+	}
 	if (options->password)
 	{
 		m->c->password = MQTTStrdup(options->password);
@@ -865,7 +900,7 @@ int MQTTAsync_connect(MQTTAsync handle, const MQTTAsync_connectOptions* options)
 			*m->connectProps = MQTTProperties_copy(options->connectProperties);
 
 			if (MQTTProperties_hasProperty(options->connectProperties, MQTTPROPERTY_CODE_SESSION_EXPIRY_INTERVAL))
-				m->c->sessionExpiry = MQTTProperties_getNumericValue(options->connectProperties,
+				m->c->sessionExpiry = (int)MQTTProperties_getNumericValue(options->connectProperties,
 						MQTTPROPERTY_CODE_SESSION_EXPIRY_INTERVAL);
 
 		}
@@ -923,12 +958,9 @@ int MQTTAsync_reconnect(MQTTAsync handle)
 		if (m->shouldBeConnected)
 		{
 			m->reconnectNow = 1;
-			if (m->retrying == 0)
-			{
-				m->currentIntervalBase = m->minRetryInterval;
-				m->currentInterval = m->minRetryInterval;
-				m->retrying = 1;
-			}
+			m->currentIntervalBase = m->minRetryInterval;
+			m->currentInterval = m->minRetryInterval;
+			m->retrying = 1;
 			rc = MQTTASYNC_SUCCESS;
 		}
 	}
@@ -957,6 +989,13 @@ exit:
 }
 
 
+int MQTTAsync_inCallback()
+{
+	thread_id_type thread_id = Paho_thread_getid();
+	return thread_id == sendThread_id || thread_id == receiveThread_id;
+}
+
+
 int MQTTAsync_subscribeMany(MQTTAsync handle, int count, char* const* topic, const int* qos, MQTTAsync_responseOptions* response)
 {
 	MQTTAsyncs* m = handle;
@@ -966,6 +1005,8 @@ int MQTTAsync_subscribeMany(MQTTAsync handle, int count, char* const* topic, con
 	int msgid = 0;
 
 	FUNC_ENTRY;
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_lock_mutex(mqttasync_mutex);
 	if (m == NULL || m->c == NULL)
 		rc = MQTTASYNC_FAILURE;
 	else if (m->c->connected == 0)
@@ -1069,6 +1110,8 @@ int MQTTAsync_subscribeMany(MQTTAsync handle, int count, char* const* topic, con
 		rc = PAHO_MEMORY_ERROR;
 
 exit:
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_unlock_mutex(mqttasync_mutex);
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
@@ -1093,6 +1136,8 @@ int MQTTAsync_unsubscribeMany(MQTTAsync handle, int count, char* const* topic, M
 	int msgid = 0;
 
 	FUNC_ENTRY;
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_lock_mutex(mqttasync_mutex);
 	if (m == NULL || m->c == NULL)
 		rc = MQTTASYNC_FAILURE;
 	else if (m->c->connected == 0)
@@ -1157,6 +1202,8 @@ int MQTTAsync_unsubscribeMany(MQTTAsync handle, int count, char* const* topic, M
 	rc = MQTTAsync_addCommand(unsub, sizeof(unsub));
 
 exit:
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_unlock_mutex(mqttasync_mutex);
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
@@ -1181,6 +1228,8 @@ int MQTTAsync_send(MQTTAsync handle, const char* destinationName, int payloadlen
 	int msgid = 0;
 
 	FUNC_ENTRY;
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_lock_mutex(mqttasync_mutex);
 	if (m == NULL || m->c == NULL)
 		rc = MQTTASYNC_FAILURE;
 	else if (m->c->connected == 0)
@@ -1264,6 +1313,8 @@ int MQTTAsync_send(MQTTAsync handle, const char* destinationName, int payloadlen
 	rc = MQTTAsync_addCommand(pub, sizeof(pub));
 
 exit:
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_unlock_mutex(mqttasync_mutex);
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
@@ -1301,10 +1352,19 @@ exit:
 
 int MQTTAsync_disconnect(MQTTAsync handle, const MQTTAsync_disconnectOptions* options)
 {
+	int rc = 0;
+
+	FUNC_ENTRY;
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_lock_mutex(mqttasync_mutex);
 	if (options != NULL && (strncmp(options->struct_id, "MQTD", 4) != 0 || options->struct_version < 0 || options->struct_version > 1))
-		return MQTTASYNC_BAD_STRUCTURE;
+		rc = MQTTASYNC_BAD_STRUCTURE;
 	else
-		return MQTTAsync_disconnect1(handle, options, 0);
+		rc = MQTTAsync_disconnect1(handle, options, 0);
+	if (!MQTTAsync_inCallback())
+		MQTTAsync_unlock_mutex(mqttasync_mutex);
+	FUNC_EXIT_RC(rc);
+	return rc;
 }
 
 
@@ -1354,8 +1414,8 @@ int MQTTAsync_isComplete(MQTTAsync handle, MQTTAsync_token dt)
 		current = NULL;
 		while (ListNextElement(m->c->outboundMsgs, &current))
 		{
-			Messages* m = (Messages*)(current->content);
-			if (m->msgid == dt)
+			Messages* m2 = (Messages*)(current->content);
+			if (m2->msgid == dt)
 				goto exit;
 		}
 	}
@@ -1425,6 +1485,7 @@ int MQTTAsync_getPendingTokens(MQTTAsync handle, MQTTAsync_token **tokens)
 
 	FUNC_ENTRY;
 	MQTTAsync_lock_mutex(mqttasync_mutex);
+	MQTTAsync_lock_mutex(mqttcommand_mutex);
 	*tokens = NULL;
 
 	if (m == NULL)
@@ -1438,7 +1499,7 @@ int MQTTAsync_getPendingTokens(MQTTAsync handle, MQTTAsync_token **tokens)
 	{
 		MQTTAsync_queuedCommand* cmd = (MQTTAsync_queuedCommand*)(current->content);
 
-		if (cmd->client == m)
+		if (cmd->client == m && cmd->command.type == PUBLISH)
 			count++;
 	}
 	if (m->c)
@@ -1459,7 +1520,7 @@ int MQTTAsync_getPendingTokens(MQTTAsync handle, MQTTAsync_token **tokens)
 	{
 		MQTTAsync_queuedCommand* cmd = (MQTTAsync_queuedCommand*)(current->content);
 
-		if (cmd->client == m)
+		if (cmd->client == m  && cmd->command.type == PUBLISH)
 			(*tokens)[count++] = cmd->command.token;
 	}
 
@@ -1469,13 +1530,14 @@ int MQTTAsync_getPendingTokens(MQTTAsync handle, MQTTAsync_token **tokens)
 		current = NULL;
 		while (ListNextElement(m->c->outboundMsgs, &current))
 		{
-			Messages* m = (Messages*)(current->content);
-			(*tokens)[count++] = m->msgid;
+			Messages* m2 = (Messages*)(current->content);
+			(*tokens)[count++] = m2->msgid;
 		}
 	}
 	(*tokens)[count] = -1; /* indicate end of list */
 
 exit:
+	MQTTAsync_unlock_mutex(mqttcommand_mutex);
 	MQTTAsync_unlock_mutex(mqttasync_mutex);
 	FUNC_EXIT_RC(rc);
 	return rc;
@@ -1642,6 +1704,7 @@ int MQTTAsync_setUpdateConnectOptions(MQTTAsync handle, void* context, MQTTAsync
 }
 
 
+#if !defined(NO_PERSISTENCE)
 int MQTTAsync_setBeforePersistenceWrite(MQTTAsync handle, void* context, MQTTPersistence_beforeWrite* co)
 {
 	int rc = MQTTASYNC_SUCCESS;
@@ -1684,6 +1747,7 @@ int MQTTAsync_setAfterPersistenceRead(MQTTAsync handle, void* context, MQTTPersi
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
+#endif
 
 
 void MQTTAsync_setTraceLevel(enum MQTTASYNC_TRACE_LEVELS level)
@@ -1777,6 +1841,8 @@ const char* MQTTAsync_strerror(int code)
       return "Zero length will topic on connect";
     case MQTTASYNC_COMMAND_IGNORED:
       return "Connect or disconnect command ignored";
+    case MQTTASYNC_MAX_BUFFERED:
+      return "maxBufferedMessages in the connect options must be >= 0";
   }
 
   chars = snprintf(buf, sizeof(buf), "Unknown error code %d", code);
