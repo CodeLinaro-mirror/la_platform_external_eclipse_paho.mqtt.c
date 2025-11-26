@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018, 2021 Wind River Systems, Inc., Ian Craggs and others
+ * Copyright (c) 2018, 2024 Wind River Systems, Inc., Ian Craggs and others
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -14,24 +14,22 @@
  *    Keith Holman - initial implementation and documentation
  *    Ian Craggs - use memory tracking
  *    Ian Craggs - fix for one MQTT packet spread over >1 ws frame
+ *    Sven Gambel - move WebSocket proxy support to generic proxy support
  *******************************************************************************/
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-// for timeout process in WebSocket_proxy_connect()
-#include <time.h>
-#if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 #include "WebSocket.h"
 
 #include "Base64.h"
 #include "Log.h"
+#if defined(OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x030000000
+#include "openssl/evp.h"
+#else
 #include "SHA1.h"
+#endif
 #include "LinkedList.h"
 #include "MQTTProtocolOut.h"
 #include "SocketBuffer.h"
@@ -95,7 +93,7 @@
 #define HTTP_PROTOCOL(x) x ? "https" : "http"
 
 #if !(defined(_WIN32) || defined(_WIN64))
-#if defined(LIBUUID)
+#if defined(USE_LIBUUID)
 #include <uuid/uuid.h>
 #else /* if defined(USE_LIBUUID) */
 #include <limits.h>
@@ -109,7 +107,7 @@ typedef unsigned char uuid_t[16];
  * @brief generates a uuid, compatible with RFC 4122, version 4 (random)
  * @note Uses a very insecure algorithm but no external dependencies
  */
-void uuid_generate( uuid_t out )
+static void uuid_generate( uuid_t out )
 {
 #if defined(OPENSSL)
 	int rc = RAND_bytes( out, sizeof(uuid_t));
@@ -127,7 +125,8 @@ void uuid_generate( uuid_t out )
 }
 
 /** @brief converts a uuid to a string */
-void uuid_unparse( uuid_t uu, char *out )
+#if 0
+static void uuid_unparse( uuid_t uu, char *out )
 {
 	int i;
 	for ( i = 0; i < 16; ++i )
@@ -141,7 +140,8 @@ void uuid_unparse( uuid_t uu, char *out )
 	}
 	*out = '\0';
 }
-#endif /* else if defined(LIBUUID) */
+#endif
+#endif /* else if defined(USE_LIBUUID) */
 #endif /* if !(defined(_WIN32) || defined(_WIN64)) */
 
 #include "Heap.h"
@@ -375,6 +375,7 @@ static void WebSocket_unmaskData(size_t idx, PacketBuffers* bufs)
  * sends out a websocket request on the given uri
  *
  * @param[in]      net                 network connection
+ * @param[in]      ssl                 ssl flag
  * @param[in]      uri                 uri to connect to
  *
  * @retval SOCKET_ERROR                on failure
@@ -382,7 +383,7 @@ static void WebSocket_unmaskData(size_t idx, PacketBuffers* bufs)
  *
  * @see WebSocket_upgrade
  */
-int WebSocket_connect( networkHandles *net, const char *uri)
+int WebSocket_connect( networkHandles *net, int ssl, const char *uri)
 {
 	int rc;
 	char *buf = NULL;
@@ -404,7 +405,18 @@ int WebSocket_connect( networkHandles *net, const char *uri)
 	if (net->websocket_key == NULL)
 		net->websocket_key = malloc(25u);
 	else
-		net->websocket_key = realloc(net->websocket_key, 25u);
+	{
+		void* newPtr = realloc(net->websocket_key, 25u);
+		if (newPtr == NULL)
+		{
+			free(net->websocket_key);
+			net->websocket_key = NULL;
+		}
+		else
+		{
+			net->websocket_key = newPtr;
+		}
+	}
 	if (net->websocket_key == NULL)
 	{
 		rc = PAHO_MEMORY_ERROR;
@@ -419,7 +431,7 @@ int WebSocket_connect( networkHandles *net, const char *uri)
 	Base64_encode( net->websocket_key, 25u, uuid, sizeof(uuid_t) );
 #endif /* else if defined(_WIN32) || defined(_WIN64) */
 
-	hostname_len = MQTTProtocol_addressPort(uri, &port, &topic, WS_DEFAULT_PORT);
+	hostname_len = MQTTProtocol_addressPort(uri, &port, &topic, ssl ? WSS_DEFAULT_PORT : WS_DEFAULT_PORT);
 
 	/* if no topic, use default */
 	if ( !topic )
@@ -706,8 +718,7 @@ char *WebSocket_getdata(networkHandles *net, size_t bytes, size_t* actual_len)
 		/* no current frame, so let's go receive one for the network */
 		if ( !frame )
 		{
-			const int rc =
-				WebSocket_receiveFrame( net, actual_len );
+			rc = WebSocket_receiveFrame( net, actual_len );
 
 			if ( rc == TCPSOCKET_COMPLETE && in_frames && in_frames->first)
 				frame = in_frames->first->content;
@@ -720,7 +731,7 @@ char *WebSocket_getdata(networkHandles *net, size_t bytes, size_t* actual_len)
 
 
 			while (*actual_len < bytes) {
-				const int rc = WebSocket_receiveFrame(net, actual_len);
+				rc = WebSocket_receiveFrame(net, actual_len);
 
 				if (rc != TCPSOCKET_COMPLETE) {
 					goto exit;
@@ -785,7 +796,7 @@ char *WebSocket_getRawSocketData(networkHandles *net, size_t bytes, size_t* actu
 			*actual_len = bytes;
 			rv = frame_buffer + frame_buffer_index;
 			frame_buffer_index += bytes;
-
+			*rc = (int)bytes;
 			goto exit;
 		}
 		else
@@ -849,7 +860,19 @@ char *WebSocket_getRawSocketData(networkHandles *net, size_t bytes, size_t* actu
 		// resize buffer
 		else
 		{
-			frame_buffer = realloc(frame_buffer, frame_buffer_data_len + *actual_len);
+			void* newPtr = realloc(frame_buffer, frame_buffer_data_len + *actual_len);
+			if (newPtr == NULL)
+			{
+				free(frame_buffer);
+				frame_buffer = NULL;
+
+				rv = NULL;
+				goto exit;
+			}
+			else
+			{
+				frame_buffer = newPtr;
+			}
 			frame_buffer_len = frame_buffer_data_len + *actual_len;
 
 			memcpy(frame_buffer + frame_buffer_data_len, rv, *actual_len);
@@ -862,7 +885,7 @@ char *WebSocket_getRawSocketData(networkHandles *net, size_t bytes, size_t* actu
 		goto exit;
 
 	bytes = bytes_requested;
-    
+
 	// if possible, return data from the buffer
 	if (bytes > 0)
 	{
@@ -1051,9 +1074,9 @@ int WebSocket_receiveFrame(networkHandles *net, size_t *actual_len)
 
 				/* invalid websocket packet must return error */
 				if ( opcode < WebSocket_OP_CONTINUE ||
-				     opcode > WebSocket_OP_PONG ||
-				     ( opcode > WebSocket_OP_BINARY &&
-				       opcode < WebSocket_OP_CLOSE ) )
+					 opcode > WebSocket_OP_PONG ||
+					 ( opcode > WebSocket_OP_BINARY &&
+					   opcode < WebSocket_OP_CLOSE ) )
 				{
 					rc = SOCKET_ERROR;
 					goto exit;
@@ -1067,7 +1090,7 @@ int WebSocket_receiveFrame(networkHandles *net, size_t *actual_len)
 				if ( payload_len == 126 )
 				{
 					/* If 126, the following 2 bytes interpreted as a
-					      16-bit unsigned integer are the payload length. */
+						  16-bit unsigned integer are the payload length. */
 					b = WebSocket_getRawSocketData(net, 2u, &len, &rcs);
 					if (rcs == SOCKET_ERROR)
 					{
@@ -1090,7 +1113,7 @@ int WebSocket_receiveFrame(networkHandles *net, size_t *actual_len)
 				else if ( payload_len == 127 )
 				{
 					 /* If 127, the following 8 bytes interpreted as a 64-bit unsigned integer (the
-					      most significant bit MUST be 0) are the payload length */
+						  most significant bit MUST be 0) are the payload length */
 					b = WebSocket_getRawSocketData(net, 8u, &len, &rcs);
 					if (rcs == SOCKET_ERROR)
 					{
@@ -1172,10 +1195,18 @@ int WebSocket_receiveFrame(networkHandles *net, size_t *actual_len)
 					res->pos = 0u;
 				} else
 				{
-					if ((res = realloc( res, sizeof(struct ws_frame) + cur_len + len )) == NULL)
+					void* newPtr = realloc( res, sizeof(struct ws_frame) + cur_len + len );
+					if (newPtr == NULL)
 					{
+						free(res);
+						res = NULL;
+
 						rc = PAHO_MEMORY_ERROR;
 						goto exit;
+					}
+					else
+					{
+						res = newPtr;
 					}
 				}
 				if (in_frames && in_frames->first)
@@ -1318,24 +1349,60 @@ int WebSocket_upgrade( networkHandles *net )
 	FUNC_ENTRY;
 	if ( net->websocket_key )
 	{
-		SHA_CTX ctx;
-		char ws_key[62u] = { 0 };
-		unsigned char sha_hash[SHA1_DIGEST_LENGTH];
+		char ws_key[62u] = {0};
 		size_t rcv = 0u;
 		char *read_buf;
+#if defined(OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x030000000
+		EVP_MD_CTX *sha1_ctx = NULL;
+		unsigned char sha_hash[EVP_MAX_MD_SIZE];
+		unsigned int sha_len = 0;
+#else
+		SHA_CTX ctx;
+		unsigned char sha_hash[SHA1_DIGEST_LENGTH];
+#endif
 
 		/* calculate the expected websocket key, expected from server */
-		snprintf( ws_key, sizeof(ws_key), "%s%s", net->websocket_key, ws_guid );
+		snprintf(ws_key, sizeof(ws_key), "%s%s", net->websocket_key, ws_guid);
+#if defined(OPENSSL) && OPENSSL_VERSION_NUMBER >= 0x030000000
+		sha1_ctx = EVP_MD_CTX_new();
+		if (sha1_ctx) {
+			rc = EVP_DigestInit(sha1_ctx, EVP_sha1());
+			if (rc == 0)
+				Log(LOG_ERROR, 1, "EVP_DigestInit failed");
+			else
+				rc = EVP_DigestUpdate(sha1_ctx, ws_key, strlen(ws_key));
+			if (rc == 0)
+				Log(LOG_ERROR, 1, "EVP_DigestUpdate failed");
+			else
+				rc = EVP_DigestFinal(sha1_ctx, sha_hash, &sha_len);
+			if (rc == 0)
+				Log(LOG_ERROR, 1, "EVP_DigestFinal failed");
+			EVP_MD_CTX_free(sha1_ctx);
+			if (rc == 0)
+			{
+				rc = SOCKET_ERROR;
+				goto exit;
+			}
+		} else
+		{
+			Log(LOG_ERROR, 1, "EVP_MD_CTX_new failed");
+			rc = SOCKET_ERROR;
+			goto exit;
+		}
+		Base64_encode( ws_key, sizeof(ws_key), sha_hash, sha_len);
+#else
 		SHA1_Init( &ctx );
 		SHA1_Update( &ctx, ws_key, strlen(ws_key));
 		SHA1_Final( sha_hash, &ctx );
 		Base64_encode( ws_key, sizeof(ws_key), sha_hash, SHA1_DIGEST_LENGTH );
+#endif
 
 		read_buf = WebSocket_getRawSocketData( net, 12u, &rcv, &rc);
 		if (rc == SOCKET_ERROR)
 			goto exit;
 
-		if ((read_buf == NULL) || rcv < 12u) {
+		if ((read_buf == NULL) || rcv < 12u)
+		{
 			Log(TRACE_PROTOCOL, 1, "WebSocket upgrade read not complete %lu", rcv );
 			rc = TCPSOCKET_INTERRUPTED;
 			goto exit;
@@ -1430,120 +1497,6 @@ int WebSocket_upgrade( networkHandles *net )
 			/* indicate that we done with the packet */
 			WebSocket_getRawSocketData( net, 0u, &rcv, &rc);
 		}
-	}
-
-exit:
-	FUNC_EXIT_RC(rc);
-	return rc;
-}
-
-/**
- * Notify the IP address and port of the endpoint to proxy, and wait connection to endpoint.
- *
- * @param[in]  net               network connection to proxy.
- * @param[in]  ssl               enable ssl.
- * @param[in]  hostname          hostname of endpoint.
- *
- * @retval SOCKET_ERROR          failed to network connection
- * @retval 0                     connection to endpoint
- * 
- */
-int WebSocket_proxy_connect( networkHandles *net, int ssl, const char *hostname)
-{
-	int port, i, rc = 0, buf_len=0;
-	char *buf = NULL;
-	size_t hostname_len, actual_len = 0; 
-	time_t current, timeout;
-	PacketBuffers nulbufs = {0, NULL, NULL, NULL, {0, 0, 0, 0}};
-
-	FUNC_ENTRY;
-	hostname_len = MQTTProtocol_addressPort(hostname, &port, NULL, WS_DEFAULT_PORT);
-	for ( i = 0; i < 2; ++i ) {
-#if defined(OPENSSL)
-		if(ssl) {
-			if (net->https_proxy_auth) {
-				buf_len = snprintf( buf, (size_t)buf_len, "CONNECT %.*s:%d HTTP/1.1\r\n"
-					"Host: %.*s\r\n"
-					"Proxy-authorization: Basic %s\r\n"
-					"\r\n",
-					(int)hostname_len, hostname, port,
-					(int)hostname_len, hostname, net->https_proxy_auth);
-			}
-			else {
-				buf_len = snprintf( buf, (size_t)buf_len, "CONNECT %.*s:%d HTTP/1.1\r\n"
-					"Host: %.*s\r\n"
-					"\r\n",
-					(int)hostname_len, hostname, port,
-					(int)hostname_len, hostname);
-			}
-		}
-		else {
-#endif
-			if (net->http_proxy_auth) {
-				buf_len = snprintf( buf, (size_t)buf_len, "CONNECT %.*s:%d HTTP/1.1\r\n"
-					"Host: %.*s\r\n"
-					"Proxy-authorization: Basic %s\r\n"
-					"\r\n",
-					(int)hostname_len, hostname, port,
-					(int)hostname_len, hostname, net->http_proxy_auth);
-			}
-			else {
-				buf_len = snprintf( buf, (size_t)buf_len, "CONNECT %.*s:%d HTTP/1.1\r\n"
-					"Host: %.*s\r\n"
-					"\r\n",
-					(int)hostname_len, hostname, port,
-					(int)hostname_len, hostname);
-			}
-#if defined(OPENSSL)
-		}
-#endif
-		if ( i==0 && buf_len > 0 ) {
-			++buf_len;
-			if ((buf = malloc( buf_len )) == NULL)
-			{
-				rc = PAHO_MEMORY_ERROR;
-				goto exit;
-			}
-
-		}  
-	}
-	Log(TRACE_PROTOCOL, -1, "WebSocket_proxy_connect: \"%s\"", buf);
-
-	Socket_putdatas(net->socket, buf, buf_len, nulbufs);
-	free(buf);
-	buf = NULL;
-
-	time(&timeout);
-	timeout += (time_t)10;
-
-	while(1) {
-		buf = Socket_getdata(net->socket, (size_t)12, &actual_len, &rc);
-		if(actual_len) {
-			if ( (strncmp( buf, "HTTP/1.0 200", 12 ) != 0) &&  (strncmp( buf, "HTTP/1.1 200", 12 ) != 0) )
-				rc = SOCKET_ERROR;
-			break;
-		}
-		else {
-			time(&current);
-			if(current > timeout) {
-				rc = SOCKET_ERROR;
-				break;
-			}
-#if defined(_WIN32) || defined(_WIN64)
-			Sleep(250);
-#else
-			usleep(250000);
-#endif
-		}
-	}
-
-	/* flush the SocketBuffer */
-	actual_len = 1;
-	while (actual_len)
-	{
-		int rc1;
-
-		buf = Socket_getdata(net->socket, (size_t)1, &actual_len, &rc1);
 	}
 
 exit:

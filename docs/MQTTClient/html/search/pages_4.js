@@ -1,5 +1,4 @@
 var searchData=
 [
-  ['synchronous_20publication_20example_608',['Synchronous publication example',['../pubsync.html',1,'']]],
-  ['subscription_20wildcards_609',['Subscription wildcards',['../wildcard.html',1,'']]]
+  ['http_20proxies_0',['HTTP Proxies',['../_h_t_t_p_proxies.html',1,'']]]
 ];

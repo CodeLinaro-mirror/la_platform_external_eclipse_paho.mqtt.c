@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2020 IBM Corp.
+ * Copyright (c) 2009, 2024 IBM Corp., Ian Craggs
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -54,7 +54,7 @@ struct Options
 	int iterations;
 } options =
 {
-	"mqtt.eclipse.org:1883",
+	"localhost:1883",
 	0,
 	-1,
 	10000,
@@ -277,6 +277,7 @@ void test1_onUnsubscribe(void* context, MQTTAsync_successData* response)
 	MyLog(LOGA_DEBUG, "In onUnsubscribe onSuccess callback %p", c);
 	opts.onSuccess = test1_onDisconnect;
 	opts.context = c;
+	opts.timeout = 1000;
 
 	rc = MQTTAsync_disconnect(c, &opts);
 	assert("Disconnect successful", rc == MQTTASYNC_SUCCESS, "rc was %d", rc);
@@ -554,6 +555,7 @@ void test3_onUnsubscribe(void* context, MQTTAsync_successData* response)
 	MyLog(LOGA_DEBUG, "In onUnsubscribe onSuccess callback \"%s\"", cd->clientid);
 	opts.onSuccess = test3_onDisconnect;
 	opts.context = cd;
+	opts.timeout = 1000;
 
 	rc = MQTTAsync_disconnect(cd->c, &opts);
 	assert("Disconnect successful", rc == MQTTASYNC_SUCCESS, "rc was %d", rc);
@@ -1176,6 +1178,7 @@ void test7_onUnsubscribe(void* context, MQTTAsync_successData* response)
 	MyLog(LOGA_DEBUG, "In onUnsubscribe onSuccess callback %p", c);
 	opts.onSuccess = test7_onDisconnect;
 	opts.context = c;
+	opts.timeout = 1000;
 
 	rc = MQTTAsync_disconnect(c, &opts);
 	assert("Disconnect successful", rc == MQTTASYNC_SUCCESS, "rc was %d", rc);
@@ -1751,7 +1754,7 @@ void trace_callback(enum MQTTASYNC_TRACE_LEVELS level, char* message)
 int main(int argc, char** argv)
 {
 	int rc = 0;
- 	int (*tests[])() = {NULL, test1, test2, test3, test4, test5, test6, test7, test8}; /* indexed starting from 1 */
+ 	int (*tests[])(struct Options) = {NULL, test1, test2, test3, test4, test5, test6, test7, test8}; /* indexed starting from 1 */
 	MQTTAsync_nameValue* info;
 	int i;
 
