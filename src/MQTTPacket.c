@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2009, 2021 IBM Corp. and Ian Craggs
+ * Copyright (c) 2009, 2024 IBM Corp. and Ian Craggs
  *
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
@@ -30,6 +30,8 @@
 #if !defined(NO_PERSISTENCE)
 	#include "MQTTPersistence.h"
 #endif
+#include <ctype.h>
+
 #include "Messages.h"
 #include "StackTrace.h"
 #include "WebSocket.h"
@@ -132,7 +134,10 @@ void* MQTTPacket_Factory(int MQTTVersion, networkHandles* net, int* error)
 	}
 
 	if (actual_len < remaining_length)
+	{
 		*error = TCPSOCKET_INTERRUPTED;
+		net->lastReceived = MQTTTime_now();
+	}
 	else
 	{
 		ptype = header.bits.type;
@@ -816,10 +821,11 @@ void* MQTTPacket_ack(int MQTTVersion, unsigned char aHeader, char* data, size_t 
 		pack->rc = MQTTREASONCODE_SUCCESS;
 		pack->properties = props;
 
-		if (datalen > 2)
+		/* disconnect has no msgid */
+		if (datalen > 2 || (pack->header.bits.type == DISCONNECT && datalen > 0))
 			pack->rc = readChar(&curdata); /* reason code */
 
-		if (datalen > 3)
+		if (datalen > 3 || (pack->header.bits.type == DISCONNECT && datalen > 1))
 		{
 			if (MQTTProperties_read(&pack->properties, &curdata, enddata) != 1)
 			{
@@ -835,6 +841,45 @@ void* MQTTPacket_ack(int MQTTVersion, unsigned char aHeader, char* data, size_t 
 exit:
 	FUNC_EXIT;
 	return pack;
+}
+
+
+/**
+ * Format the payload for printing in the trace.
+ * Any unprintable characters output as hex.
+ * @param buflen the length of the supplied print buffer
+ * @param buf the supplied print buffer
+ * @param payloadlen the length of the payload to be printed
+ * @param payload the payload data to be printed
+ * @return the length of the data output to the print buffer
+ */
+int MQTTPacket_formatPayload(int buflen, char* buf, int payloadlen, char* payload)
+{
+	int pos = 0;
+	int i = 0;
+
+	for (i = 0; i < payloadlen; i++)
+	{
+		if (isprint(payload[i]))
+		{
+			if (pos >= buflen)
+				break;
+			buf[pos++] = payload[i];
+		}
+		else
+		{
+			static char *hexdigit = "0123456789ABCDEF";
+
+			if (pos >= buflen - 3)
+				break;
+			buf[pos++] = '\\';
+			buf[pos++] = 'x';
+			buf[pos++] = hexdigit[payload[i] & 0xF0];
+			buf[pos++] = hexdigit[payload[i] & 0x0F];
+		}
+	}
+
+	return pos;
 }
 
 
@@ -899,12 +944,23 @@ int MQTTPacket_send_publish(Publish* pack, int dup, int qos, int retained, netwo
 		rc = MQTTPacket_sends(net, header, &packetbufs, pack->MQTTVersion);
 		memcpy(pack->mask, packetbufs.mask, sizeof(pack->mask));
 	}
-	if (qos == 0)
-		Log(LOG_PROTOCOL, 27, NULL, net->socket, clientID, retained, rc, pack->payloadlen,
-				min(20, pack->payloadlen), pack->payload);
-	else
-		Log(LOG_PROTOCOL, 10, NULL, net->socket, clientID, pack->msgId, qos, retained, rc, pack->payloadlen,
-				min(20, pack->payloadlen), pack->payload);
+	{
+#if defined(_WIN32) || defined(_WIN64)
+		#define buflen 30
+#else
+		const int buflen = 30;
+#endif
+		char buf[buflen];
+		int len = 0;
+
+		len = MQTTPacket_formatPayload(buflen, buf, pack->payloadlen, pack->payload);
+
+		if (qos == 0)
+			Log(LOG_PROTOCOL, 27, NULL, net->socket, clientID, retained, rc, pack->payloadlen, len, buf);
+		else
+			Log(LOG_PROTOCOL, 10, NULL, net->socket, clientID, pack->msgId, qos, retained, rc, pack->payloadlen,
+					len, buf);
+	}
 exit_free:
 	if (rc != TCPSOCKET_INTERRUPTED)
 		free(topiclen);
@@ -938,14 +994,14 @@ void MQTTPacket_free_packet(MQTTPacket* pack)
  * @param pptr pointer to the output buffer - incremented by the number of bytes used & returned
  * @param anInt the integer to write
  */
-void writeInt4(char** pptr, int anInt)
+void writeInt4(char** pptr, unsigned int anInt)
 {
-  **pptr = (char)(anInt / 16777216);
-  (*pptr)++;
-  anInt %= 16777216;
-  **pptr = (char)(anInt / 65536);
-  (*pptr)++;
-  anInt %= 65536;
+	**pptr = (char)(anInt / 16777216);
+	(*pptr)++;
+	anInt %= 16777216;
+	**pptr = (char)(anInt / 65536);
+	(*pptr)++;
+	anInt %= 65536;
 	**pptr = (char)(anInt / 256);
 	(*pptr)++;
 	**pptr = (char)(anInt % 256);
@@ -958,10 +1014,10 @@ void writeInt4(char** pptr, int anInt)
  * @param pptr pointer to the input buffer - incremented by the number of bytes used & returned
  * @return the integer value calculated
  */
-int readInt4(char** pptr)
+unsigned int readInt4(char** pptr)
 {
 	unsigned char* ptr = (unsigned char*)*pptr;
-	int value = 16777216*(*ptr) + 65536*(*(ptr+1)) + 256*(*(ptr+2)) + (*(ptr+3));
+	unsigned int value = 16777216*(*ptr) + 65536*(*(ptr+1)) + 256*(*(ptr+2)) + (*(ptr+3));
 	*pptr += 4;
 	return value;
 }
